@@ -1,40 +1,74 @@
-# Agent Instructions
+# Agent Instructions — Better-OpenCodeMCP
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+## What This Is
 
-## Quick Reference
+MCP server (stdio transport) that bridges Claude Code to OpenCode CLI.
+Fork of frap129/opencode-mcp-tool with async task execution, process pooling, and concurrency fixes.
+Package: `opencode-mcp-tool` v2.0.0 | License: MIT | Node >=16
+
+## Build & Dev
 
 ```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --status in_progress  # Claim work
-bd close <id>         # Complete work
-bd sync               # Sync with git
+npm install          # install deps
+npm run build        # tsc → dist/
+npm run dev          # build + run
+npm start            # run from dist/
+npm test             # vitest run (293 tests)
+npm run test:watch   # vitest in watch mode
+npm run lint         # tsc --noEmit (type check only)
 ```
 
-## Landing the Plane (Session Completion)
+Package manager: **npm** (lockfile is package-lock.json).
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+## Local Testing
 
-**MANDATORY WORKFLOW:**
+```bash
+npm run build
+node dist/index.js                          # auto-detects model from OpenCode state
+node dist/index.js --model google/gemini-2.5-pro  # explicit model
+node dist/index.js --setup                  # interactive config wizard
+node dist/index.js --log-level debug        # verbose logging
+```
 
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   bd sync
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
+To test as an MCP server in Claude Code:
+```bash
+claude mcp add opencode -- node /absolute/path/to/dist/index.js
+```
 
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+Config file written by `--setup`: `~/.config/opencode-mcp/config.json`
 
+## Testing
+
+Framework: **Vitest** (v4, vitest.config.ts). Tests in two locations:
+- `src/__tests__/` — integration, JSON parser, sessions, task persistence
+- `src/tests/` — concurrency, process pool, tool registry
+
+30-second test timeout configured globally.
+
+## Source Layout
+
+```
+src/
+  index.ts              # entrypoint — CLI arg parsing, MCP server setup (StdioServerTransport)
+  config.ts             # runtime config singleton
+  constants.ts          # protocol version, process limits
+  config/               # config loading, model auto-detection
+  commands/setup.ts     # interactive setup wizard
+  tools/                # MCP tool definitions (opencode, sessions, respond, cancel, health)
+    registry.ts         # tool registration system
+  tasks/                # async task manager
+  persistence/          # task state persistence to disk
+  utils/                # logger, helpers
+```
+
+## Conventions
+
+- ESM (`"type": "module"` in package.json), all imports use `.js` extensions
+- Zod schemas for all tool input validation
+- `prepare` hook runs build on `npm install` (matters for npm link)
+- CI tests on Node 16/18/20 (GitHub Actions, ubuntu-latest)
+- Windows: process spawning uses `shell: true`; termination uses `taskkill /T /F`
+
+---
+
+Session completion and beads workflow are in the global CLAUDE.md.
