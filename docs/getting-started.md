@@ -21,7 +21,7 @@
 Before installing, ensure you have:
 
 - **[Node.js](https://nodejs.org/)** v16.0.0 or higher
-- **[OpenCode CLI](https://github.com/fictiverse/opencode)** installed and configured on your system
+- **[OpenCode CLI](https://github.com/opencode-ai/opencode)** installed and configured on your system
 - **[Claude Desktop](https://claude.ai/download)** or **[Claude Code](https://www.anthropic.com/claude-code)** with MCP support
 
 
@@ -106,7 +106,7 @@ OpenCode MCP Tool works with 40+ MCP clients! Here are the common configuration 
 </details>
 ### Generic Setup Steps
 
-1. **Install Prerequisites**: Ensure [OpenCode CLI](https://github.com/fictiverse/opencode) is installed
+1. **Install Prerequisites**: Ensure [OpenCode CLI](https://github.com/opencode-ai/opencode) is installed
 2. **Add Server Config**: Use the STDIO transport pattern above
 3. **Restart Client**: Most clients require restart after config changes
 4. **Test Connection**: Try `/opencode:ping` or natural language commands

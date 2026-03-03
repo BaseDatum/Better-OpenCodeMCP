@@ -11,7 +11,7 @@
 
 > Actively maintained fork of [opencode-mcp-tool](https://github.com/frap129/opencode-mcp-tool) with async task execution, concurrency fixes, and comprehensive testing.
 
-A Model Context Protocol (MCP) server that allows AI assistants to interact with the [OpenCode CLI](https://github.com/fictiverse/opencode). It enables AI assistants to leverage multiple AI models through a unified interface with **async task execution** for parallel processing and long-running operations.
+A Model Context Protocol (MCP) server that allows AI assistants to interact with the [OpenCode CLI](https://github.com/opencode-ai/opencode). It enables AI assistants to leverage multiple AI models through a unified interface with **async task execution** for parallel processing and long-running operations.
 
 ## What's Different in This Fork
 
@@ -33,7 +33,7 @@ A Model Context Protocol (MCP) server that allows AI assistants to interact with
 Before using this tool, ensure you have:
 
 1. **[Node.js](https://nodejs.org/)** (v16.0.0 or higher)
-2. **[OpenCode CLI](https://github.com/fictiverse/opencode)** installed and configured
+2. **[OpenCode CLI](https://github.com/opencode-ai/opencode)** installed and configured
 
 ### Quick Setup (Recommended)
 
