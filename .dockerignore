@@ -1,0 +1,11 @@
+node_modules
+.git
+.github
+src
+docs
+scripts
+*.md
+!README.md
+tsconfig.json
+vitest.config.ts
+.beads

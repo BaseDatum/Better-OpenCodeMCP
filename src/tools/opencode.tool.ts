@@ -77,6 +77,12 @@ const processTimeouts = new Map<string, NodeJS.Timeout>();
 
 /**
  * Spawns OpenCode process with JSON format and processes events.
+ *
+ * In multi-tenant (server) mode, uses per-user environment variables
+ * set by the HTTP server layer:
+ * - ``__OPENCODE_USER_ID``: the user ID
+ * - ``__OPENCODE_WORKSPACE``: the user's working directory
+ * - ``__OPENCODE_API_KEY``: the user's OpenRouter API key
  */
 function spawnOpenCodeProcess(
   taskId: string,
@@ -106,10 +112,35 @@ function spawnOpenCodeProcess(
 
   Logger.debug(`Spawning OpenCode: ${CLI.COMMANDS.OPENCODE} ${args.map(a => `"${a}"`).join(" ")}`);
 
+  // Build per-user environment for the child process.
+  // In server mode, the HTTP layer sets __OPENCODE_* env vars.
+  const childEnv: Record<string, string | undefined> = { ...process.env };
+  const userWorkspace = process.env.__OPENCODE_WORKSPACE;
+  const userApiKey = process.env.__OPENCODE_API_KEY;
+  const userId = process.env.__OPENCODE_USER_ID;
+
+  if (userApiKey) {
+    childEnv.OPENROUTER_API_KEY = userApiKey;
+  }
+
+  // Point XDG dirs to the per-user workspace so opencode.json and
+  // database state are isolated per user.
+  if (userWorkspace) {
+    const workspaceBase = process.env.OPENCODE_MCP_WORKSPACE_BASE ?? "/workspaces";
+    const safeUserId = (userId ?? "").replace(/[^a-f0-9-]/gi, "").slice(0, 36);
+    if (safeUserId) {
+      childEnv.XDG_CONFIG_HOME = `${workspaceBase}/${safeUserId}/.config`;
+      childEnv.XDG_DATA_HOME = `${workspaceBase}/${safeUserId}/.local/share`;
+      childEnv.XDG_STATE_HOME = `${workspaceBase}/${safeUserId}/.local/state`;
+    }
+  }
+
   // Spawn the process
   const proc = spawn(CLI.COMMANDS.OPENCODE, args, {
     stdio: ["ignore", "pipe", "pipe"],
     shell: true,
+    cwd: userWorkspace || undefined,
+    env: childEnv,
   });
 
   activeProcesses.set(taskId, proc);
