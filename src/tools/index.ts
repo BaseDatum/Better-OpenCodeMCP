@@ -6,7 +6,14 @@ import { opencodeSessionsTool } from './opencode-sessions.tool.js';
 import { opencodeRespondTool } from './opencode-respond.tool.js';
 import { opencodeCancelTool } from './opencode-cancel.tool.js';
 import { opencodeHealthTool } from './opencode-health.tool.js';
-import { opencodeWorkspaceFilesTool, opencodeWorkspaceReadTool } from './opencode-workspace.tool.js';
+import {
+  opencodeWorkspaceFilesTool,
+  opencodeWorkspaceReadTool,
+  opencodeWorkspaceWriteTool,
+  opencodeWorkspaceExecTool,
+  opencodeWorkspaceResetTool,
+} from './opencode-workspace.tool.js';
+import { opencodeTaskEventsTool } from './opencode-task-events.tool.js';
 
 toolRegistry.push(
   // Async OpenCode tools
@@ -15,9 +22,14 @@ toolRegistry.push(
   opencodeRespondTool,
   opencodeCancelTool,
   opencodeHealthTool,
-  // Workspace visibility tools
+  // Task inspection
+  opencodeTaskEventsTool,
+  // Workspace tools
   opencodeWorkspaceFilesTool,
   opencodeWorkspaceReadTool,
+  opencodeWorkspaceWriteTool,
+  opencodeWorkspaceExecTool,
+  opencodeWorkspaceResetTool,
   // Simple utility tools
   pingTool,
   helpTool

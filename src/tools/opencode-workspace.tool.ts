@@ -9,10 +9,12 @@
  */
 
 import { z } from "zod";
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { readdir, readFile, writeFile, mkdir, rm, stat } from "node:fs/promises";
+import { join, relative, dirname } from "node:path";
+import { spawn } from "node:child_process";
 import { UnifiedTool } from "./registry.js";
 import { Logger } from "../utils/logger.js";
+import { WorkspaceManager } from "../workspace.js";
 
 // ============================================================================
 // Helpers
@@ -262,5 +264,216 @@ RETURNS: JSON with file content, size, and whether it was truncated`,
     } finally {
       await fd.close();
     }
+  },
+};
+
+// ============================================================================
+// opencode_workspace_write
+// ============================================================================
+
+const writeSchema = z.object({
+  path: z
+    .string()
+    .min(1)
+    .describe("File path to write (relative to workspace root). Parent directories are created automatically."),
+  content: z
+    .string()
+    .describe("File content to write"),
+  append: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Append to file instead of overwriting (default: false)"),
+});
+
+export const opencodeWorkspaceWriteTool: UnifiedTool = {
+  name: "opencode_workspace_write",
+  description: `Write a file into the OpenCode workspace. Use this to seed files before asking OpenCode to work on them.
+
+USE THIS TOOL when you need to:
+- Drop a requirements doc, spec, or prompt file into the workspace
+- Create a config file for OpenCode to use
+- Write a patch file for OpenCode to apply
+- Seed initial project files before delegating work
+
+INPUTS:
+- path (required): File path relative to workspace root (parent dirs created automatically)
+- content (required): File content to write
+- append: Append instead of overwrite (default: false)
+
+RETURNS: JSON with path and bytes written`,
+  zodSchema: writeSchema,
+  category: "utility",
+
+  execute: async (args): Promise<string> => {
+    const root = getWorkspaceRoot();
+    const filePath = args.path as string;
+    const content = args.content as string;
+    const append = (args.append as boolean) || false;
+
+    const fullPath = join(root, filePath);
+
+    // Prevent path traversal
+    if (!fullPath.startsWith(root)) {
+      throw new Error("Path traversal not allowed");
+    }
+
+    // Ensure parent directory exists
+    await mkdir(dirname(fullPath), { recursive: true });
+
+    if (append) {
+      const { appendFile } = await import("node:fs/promises");
+      await appendFile(fullPath, content, "utf-8");
+    } else {
+      await writeFile(fullPath, content, "utf-8");
+    }
+
+    return JSON.stringify({
+      workspace: root,
+      path: filePath,
+      bytesWritten: Buffer.byteLength(content, "utf-8"),
+      append,
+    }, null, 2);
+  },
+};
+
+// ============================================================================
+// opencode_workspace_exec
+// ============================================================================
+
+const execSchema = z.object({
+  command: z
+    .string()
+    .min(1)
+    .describe("Shell command to run in the workspace (e.g. 'git log --oneline -10', 'ls -la', 'npm test')"),
+  timeout: z
+    .number()
+    .int()
+    .min(1000)
+    .max(120_000)
+    .optional()
+    .default(30_000)
+    .describe("Timeout in milliseconds (1000-120000, default: 30000)"),
+});
+
+export const opencodeWorkspaceExecTool: UnifiedTool = {
+  name: "opencode_workspace_exec",
+  description: `Run a shell command directly in the OpenCode workspace. Much faster than spawning a full OpenCode LLM session for simple operations.
+
+USE THIS TOOL when you need to:
+- Run git commands (git log, git status, git diff)
+- Check build output (npm test, npm run build)
+- Inspect files (ls, find, wc)
+- Run any quick command without LLM overhead
+
+This runs directly in the workspace shell — no LLM round-trip, no token cost, instant results.
+
+INPUTS:
+- command (required): Shell command to execute
+- timeout: Max execution time in ms (default: 30000)
+
+RETURNS: JSON with stdout, stderr, exit code`,
+  zodSchema: execSchema,
+  category: "utility",
+
+  execute: async (args): Promise<string> => {
+    const root = getWorkspaceRoot();
+    const command = args.command as string;
+    const timeout = (args.timeout as number) || 30_000;
+
+    return new Promise((resolve) => {
+      const proc = spawn("sh", ["-c", command], {
+        cwd: root,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env, HOME: root },
+        timeout,
+      });
+
+      let stdout = "";
+      let stderr = "";
+      const maxOutput = 64_000; // Cap output to prevent huge responses
+
+      proc.stdout?.on("data", (chunk: Buffer) => {
+        if (stdout.length < maxOutput) {
+          stdout += chunk.toString();
+        }
+      });
+
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        if (stderr.length < maxOutput) {
+          stderr += chunk.toString();
+        }
+      });
+
+      proc.on("error", (err) => {
+        resolve(JSON.stringify({
+          workspace: root,
+          command,
+          error: err.message,
+          exitCode: null,
+          stdout: stdout.slice(0, maxOutput),
+          stderr: stderr.slice(0, maxOutput),
+        }, null, 2));
+      });
+
+      proc.on("close", (code) => {
+        resolve(JSON.stringify({
+          workspace: root,
+          command,
+          exitCode: code,
+          stdout: stdout.length > maxOutput ? stdout.slice(0, maxOutput) + "\n... (truncated)" : stdout,
+          stderr: stderr.length > maxOutput ? stderr.slice(0, maxOutput) + "\n... (truncated)" : stderr,
+        }, null, 2));
+      });
+    });
+  },
+};
+
+// ============================================================================
+// opencode_workspace_reset
+// ============================================================================
+
+const resetSchema = z.object({
+  confirm: z
+    .literal(true)
+    .describe("Must be true to confirm the destructive reset"),
+});
+
+export const opencodeWorkspaceResetTool: UnifiedTool = {
+  name: "opencode_workspace_reset",
+  description: `Reset the OpenCode workspace to a clean state. Deletes ALL files in the workspace project directory.
+
+USE THIS TOOL when you need to:
+- Start fresh after a failed or dirty previous task
+- Clean up before cloning a different repo
+- Remove broken build artifacts or half-completed work
+
+WARNING: This is destructive — all files in the workspace are permanently deleted.
+
+INPUTS:
+- confirm (required): Must be true to confirm the reset
+
+RETURNS: JSON confirmation`,
+  zodSchema: resetSchema,
+  category: "utility",
+
+  execute: async (args): Promise<string> => {
+    const root = getWorkspaceRoot();
+
+    if (args.confirm !== true) {
+      throw new Error("confirm must be true to reset the workspace");
+    }
+
+    // Remove and recreate the project directory
+    await rm(root, { recursive: true, force: true });
+    await mkdir(root, { recursive: true });
+
+    Logger.info(`Workspace reset: ${root}`);
+
+    return JSON.stringify({
+      workspace: root,
+      status: "reset",
+      message: "Workspace has been cleared. All files deleted.",
+    }, null, 2);
   },
 };
