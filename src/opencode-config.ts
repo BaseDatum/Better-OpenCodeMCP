@@ -20,6 +20,7 @@ import { Logger } from "./utils/logger.js";
 interface OpenCodeConfig {
   $schema?: string;
   provider?: Record<string, unknown>;
+  permission?: Record<string, string> | string;
   mcp?: Record<string, unknown>;
   tools?: Record<string, boolean>;
 }
@@ -51,6 +52,15 @@ export async function generateOpenCodeConfig(
           timeout: 600000,
         },
       },
+    },
+    // Fully headless — no human to approve or answer questions.
+    // Allow all tool operations without prompting, and deny the
+    // question tool (it would hang waiting for user input).
+    permission: {
+      "*": "allow",
+      doom_loop: "allow",
+      external_directory: "allow",
+      question: "deny",
     },
     mcp: {
       github: {
