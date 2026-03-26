@@ -6,6 +6,7 @@ import { opencodeSessionsTool } from './opencode-sessions.tool.js';
 import { opencodeRespondTool } from './opencode-respond.tool.js';
 import { opencodeCancelTool } from './opencode-cancel.tool.js';
 import { opencodeHealthTool } from './opencode-health.tool.js';
+import { opencodeWorkspaceFilesTool, opencodeWorkspaceReadTool } from './opencode-workspace.tool.js';
 
 toolRegistry.push(
   // Async OpenCode tools
@@ -14,6 +15,9 @@ toolRegistry.push(
   opencodeRespondTool,
   opencodeCancelTool,
   opencodeHealthTool,
+  // Workspace visibility tools
+  opencodeWorkspaceFilesTool,
+  opencodeWorkspaceReadTool,
   // Simple utility tools
   pingTool,
   helpTool

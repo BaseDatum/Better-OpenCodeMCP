@@ -16,10 +16,13 @@ interface SessionInfo {
   sessionId: string;
   title: string;
   status: TaskStatus;
+  statusMessage?: string;
   model: string;
   agent?: string;
   createdAt: string;
   lastEventAt: string;
+  /** Final text output from OpenCode (for completed/failed tasks) */
+  output?: string;
 }
 
 /**
@@ -108,11 +111,12 @@ Each session contains: taskId, sessionId, title, status, model, agent, createdAt
     // Apply limit
     const limitedTasks = sortedTasks.slice(0, limit);
 
-    // Get status for each task and format output
+    // Get full state for each task and format output
     const sessions: SessionInfo[] = limitedTasks.map((metadata) => {
-      const taskStatus = taskManager.getTaskStatus(metadata.taskId) || "working";
+      const state = taskManager.getTaskState(metadata.taskId);
+      const taskStatus = state?.status || "working";
 
-      return {
+      const info: SessionInfo = {
         taskId: metadata.taskId,
         sessionId: metadata.sessionId,
         title: metadata.title,
@@ -122,6 +126,23 @@ Each session contains: taskId, sessionId, title, status, model, agent, createdAt
         createdAt: metadata.createdAt.toISOString(),
         lastEventAt: metadata.lastEventAt.toISOString(),
       };
+
+      // Include statusMessage if present (e.g. error messages for failed tasks)
+      if (state?.statusMessage) {
+        info.statusMessage = state.statusMessage;
+      }
+
+      // Include accumulated text output for terminal tasks so the agent
+      // can see what OpenCode produced without needing a separate call.
+      if (state?.accumulatedText && (taskStatus === "completed" || taskStatus === "failed")) {
+        // Cap at 4KB to keep the response reasonable
+        const maxOutput = 4096;
+        info.output = state.accumulatedText.length > maxOutput
+          ? state.accumulatedText.slice(0, maxOutput) + "\n... (truncated)"
+          : state.accumulatedText;
+      }
+
+      return info;
     });
 
     const output: SessionsOutput = {
