@@ -50,10 +50,10 @@ const opencodeSessionsArgsSchema = z.object({
     .default(10)
     .describe("Maximum number of sessions to return"),
   includeOutput: z
-    .boolean()
+    .union([z.boolean(), z.number().int().min(1).max(65536)])
     .optional()
     .default(false)
-    .describe("Include the text output from completed/failed tasks (last 4KB). Off by default to keep responses small."),
+    .describe("Include text output from completed/failed tasks. false=omit (default), true=last 4KB, or a number (bytes, 1-65536) for custom tail size."),
 });
 
 /**
@@ -101,7 +101,9 @@ Each session contains: taskId, sessionId, title, status, statusMessage, model, a
   execute: async (args): Promise<string> => {
     const status = (args.status as "active" | "all") || "active";
     const limit = (args.limit as number) || 10;
-    const includeOutput = (args.includeOutput as boolean) || false;
+    const rawInclude = args.includeOutput;
+    const includeOutput = rawInclude === true || (typeof rawInclude === "number" && rawInclude > 0);
+    const maxOutput = typeof rawInclude === "number" ? rawInclude : 4096;
 
     const taskManager = getTaskManager();
 
@@ -143,7 +145,6 @@ Each session contains: taskId, sessionId, title, status, statusMessage, model, a
       // Returns the LAST 4KB (most recent output) since that's what
       // matters for understanding the final result.
       if (includeOutput && state?.accumulatedText && (taskStatus === "completed" || taskStatus === "failed")) {
-        const maxOutput = 4096;
         const text = state.accumulatedText;
         info.output = text.length > maxOutput
           ? "(truncated) ...\n" + text.slice(-maxOutput)
