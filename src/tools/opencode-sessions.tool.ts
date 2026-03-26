@@ -49,6 +49,11 @@ const opencodeSessionsArgsSchema = z.object({
     .optional()
     .default(10)
     .describe("Maximum number of sessions to return"),
+  includeOutput: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Include the text output from completed/failed tasks (last 4KB). Off by default to keep responses small."),
 });
 
 /**
@@ -85,16 +90,18 @@ STATUS MEANINGS:
 INPUTS:
 - status: "active" (running tasks only) or "all" (includes completed/failed)
 - limit: Maximum sessions to return (default: 10)
+- includeOutput: Set to true to include the text output from completed/failed tasks (last 4KB). Off by default.
 
 RETURNS: { sessions: [...], total: number }
 
-Each session contains: taskId, sessionId, title, status, model, agent, createdAt, lastEventAt`,
+Each session contains: taskId, sessionId, title, status, statusMessage, model, agent, createdAt, lastEventAt, output (if requested)`,
   zodSchema: opencodeSessionsArgsSchema,
   category: "utility",
 
   execute: async (args): Promise<string> => {
     const status = (args.status as "active" | "all") || "active";
     const limit = (args.limit as number) || 10;
+    const includeOutput = (args.includeOutput as boolean) || false;
 
     const taskManager = getTaskManager();
 
@@ -132,14 +139,15 @@ Each session contains: taskId, sessionId, title, status, model, agent, createdAt
         info.statusMessage = state.statusMessage;
       }
 
-      // Include accumulated text output for terminal tasks so the agent
-      // can see what OpenCode produced without needing a separate call.
-      if (state?.accumulatedText && (taskStatus === "completed" || taskStatus === "failed")) {
-        // Cap at 4KB to keep the response reasonable
+      // Include accumulated text output only when explicitly requested.
+      // Returns the LAST 4KB (most recent output) since that's what
+      // matters for understanding the final result.
+      if (includeOutput && state?.accumulatedText && (taskStatus === "completed" || taskStatus === "failed")) {
         const maxOutput = 4096;
-        info.output = state.accumulatedText.length > maxOutput
-          ? state.accumulatedText.slice(0, maxOutput) + "\n... (truncated)"
-          : state.accumulatedText;
+        const text = state.accumulatedText;
+        info.output = text.length > maxOutput
+          ? "(truncated) ...\n" + text.slice(-maxOutput)
+          : text;
       }
 
       return info;
