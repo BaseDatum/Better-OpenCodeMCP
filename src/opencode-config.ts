@@ -9,7 +9,7 @@
  * @module opencode-config
  */
 
-import { writeFile, stat } from "node:fs/promises";
+import { writeFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { WorkspaceManager } from "./workspace.js";
 import { Logger } from "./utils/logger.js";
@@ -89,5 +89,38 @@ export async function generateOpenCodeConfig(
     Logger.debug(`Wrote opencode.json for user ${userId}`);
   } catch (err) {
     Logger.error(`Failed to write opencode.json for user ${userId}:`, err);
+  }
+}
+
+/**
+ * Refresh opencode.json for all existing user workspaces.
+ *
+ * Called at server startup so that config changes (e.g. new permission
+ * rules) take effect immediately, even for workspaces created by a
+ * previous server version.
+ */
+export async function refreshAllConfigs(
+  workspaceBase: string,
+  githubMcpUrl: string,
+): Promise<void> {
+  try {
+    const entries = await readdir(workspaceBase, { withFileTypes: true });
+    const userDirs = entries.filter((e) => e.isDirectory() && /^[a-f0-9-]{8,36}$/i.test(e.name));
+
+    let count = 0;
+    for (const dir of userDirs) {
+      try {
+        // Ensure config directory exists (idempotent).
+        await WorkspaceManager.ensureUserDir(workspaceBase, dir.name);
+        await generateOpenCodeConfig(dir.name, workspaceBase, githubMcpUrl);
+        count++;
+      } catch (err) {
+        Logger.error(`Failed to refresh config for workspace ${dir.name}:`, err);
+      }
+    }
+    Logger.info(`Refreshed opencode.json for ${count} existing workspace(s)`);
+  } catch (err) {
+    // workspaceBase might not exist yet — that's fine.
+    Logger.debug(`No existing workspaces to refresh: ${err}`);
   }
 }

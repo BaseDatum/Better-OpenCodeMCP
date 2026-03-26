@@ -4,14 +4,18 @@
  * Runs as a shared MCP server in the Dialogue cluster.  Agent pods
  * connect via Streamable HTTP on port 8027.  Each request must include
  * an ``X-Dialogue-User-Id`` header; the server creates isolated
- * per-user sessions and spawns OpenCode processes scoped to each
- * user's workspace directory.
+ * per-user workspaces and spawns OpenCode processes scoped to each
+ * user's directory.
+ *
+ * Uses the **stateless per-request** pattern: every POST creates a
+ * fresh MCP Server + Transport pair, handles the request, then tears
+ * down.  No in-memory sessions, no stale session IDs, survives pod
+ * restarts without client-side changes.
  *
  * @module server
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { randomUUID } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -49,7 +53,7 @@ import { PROCESS } from "./constants.js";
 import { setServerConfig } from "./config.js";
 import { WorkspaceManager } from "./workspace.js";
 import { resolveOpenRouterKey } from "./auth.js";
-import { generateOpenCodeConfig } from "./opencode-config.js";
+import { generateOpenCodeConfig, refreshAllConfigs } from "./opencode-config.js";
 
 // ============================================================================
 // Environment configuration
@@ -66,18 +70,9 @@ const SHARD_MANAGER_URL = process.env.OPENCODE_MCP_SHARD_MANAGER_URL ?? "http://
 const GITHUB_MCP_URL = process.env.OPENCODE_MCP_GITHUB_MCP_URL ?? "http://github-token-service:8013";
 
 // ============================================================================
-// Per-user session tracking
+// Per-user concurrency tracking (survives across stateless requests)
 // ============================================================================
 
-/**
- * Map of active MCP transports keyed by session ID.
- * Each transport is tied to a specific user.
- */
-const activeSessions = new Map<string, { transport: StreamableHTTPServerTransport; server: Server; userId: string }>();
-
-/**
- * Tracks per-user concurrent process count.
- */
 const userProcessCounts = new Map<string, number>();
 
 function incrUserProcessCount(userId: string): boolean {
@@ -93,12 +88,12 @@ function decrUserProcessCount(userId: string): void {
 }
 
 // ============================================================================
-// MCP Server factory — one per session
+// MCP Server factory — one per request (stateless)
 // ============================================================================
 
 function createMcpServer(userId: string): Server {
   const server = new Server(
-    { name: "opencode-mcp", version: "2.0.0" },
+    { name: "opencode-mcp", version: "2.1.0" },
     { capabilities: { tools: {}, prompts: {}, logging: {} } },
   );
 
@@ -129,7 +124,7 @@ function createMcpServer(userId: string): Server {
         process.env.__OPENCODE_API_KEY = orKey;
       }
 
-      // Ensure the per-user opencode.json config exists.
+      // Ensure the per-user opencode.json config is up to date.
       await generateOpenCodeConfig(userId, WORKSPACE_BASE, GITHUB_MCP_URL);
 
       const result = await executeTool(toolName, args);
@@ -168,6 +163,13 @@ function createMcpServer(userId: string): Server {
 // ============================================================================
 
 async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // Only accept POST — stateless mode has no GET SSE or DELETE session.
+  if (req.method !== "POST") {
+    res.writeHead(405, { "Content-Type": "application/json", Allow: "POST" });
+    res.end(JSON.stringify({ error: "Method not allowed. Use POST." }));
+    return;
+  }
+
   // Extract user ID from header.
   const userId = req.headers[USER_ID_HEADER] as string | undefined;
   if (!userId) {
@@ -186,54 +188,25 @@ async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Prom
   // Ensure workspace exists.
   await WorkspaceManager.ensureUserDir(WORKSPACE_BASE, userId);
 
-  // Look up or create a session.
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  // Stateless per-request pattern: fresh Server + Transport for every POST.
+  // No session tracking — survives pod restarts, no stale session IDs.
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,  // stateless mode
+  });
+  const mcpServer = createMcpServer(userId);
 
-  if (req.method === "POST" && !sessionId) {
-    // New session — create transport + server.
-    const newSessionId = randomUUID();
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => newSessionId,
-      onsessioninitialized: (sid) => {
-        Logger.debug(`[user=${userId}] MCP session initialized: ${sid}`);
-      },
-    });
-    const mcpServer = createMcpServer(userId);
-    await mcpServer.connect(transport);
-    activeSessions.set(newSessionId, { transport, server: mcpServer, userId });
+  await mcpServer.connect(transport);
 
+  try {
     await transport.handleRequest(req, res);
-    return;
+  } finally {
+    // Tear down the ephemeral server + transport after response completes.
+    // Use res.on('close') so SSE streams can finish if the SDK uses them.
+    res.on("close", () => {
+      transport.close().catch(() => {});
+      mcpServer.close().catch(() => {});
+    });
   }
-
-  if (sessionId && activeSessions.has(sessionId)) {
-    const session = activeSessions.get(sessionId)!;
-    // Verify user matches session owner.
-    if (session.userId !== userId) {
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Session does not belong to this user" }));
-      return;
-    }
-    await session.transport.handleRequest(req, res);
-    return;
-  }
-
-  if (req.method === "DELETE" && sessionId) {
-    // Session cleanup.
-    const session = activeSessions.get(sessionId!);
-    if (session) {
-      await session.transport.close();
-      await session.server.close();
-      activeSessions.delete(sessionId!);
-    }
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true }));
-    return;
-  }
-
-  // Unknown session or method — instruct client to start fresh.
-  res.writeHead(400, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error: "Invalid or expired session. Start a new session with POST." }));
 }
 
 function handleHealthRequest(_req: IncomingMessage, res: ServerResponse): void {
@@ -241,7 +214,7 @@ function handleHealthRequest(_req: IncomingMessage, res: ServerResponse): void {
   res.end(JSON.stringify({
     status: "ok",
     service: "opencode-mcp",
-    activeSessions: activeSessions.size,
+    mode: "stateless",
     uptime: process.uptime(),
   }));
 }
@@ -269,8 +242,12 @@ async function main(): Promise<void> {
   // Ensure base workspace directory exists.
   await WorkspaceManager.ensureBaseDir(WORKSPACE_BASE);
 
-  // ── MCP server (Streamable HTTP) ────────────────────────────────
-  const mcpServer = createServer(async (req, res) => {
+  // Refresh opencode.json for all existing workspaces so config changes
+  // (e.g. new permission rules) take effect immediately on deploy.
+  await refreshAllConfigs(WORKSPACE_BASE, GITHUB_MCP_URL);
+
+  // ── MCP server (Streamable HTTP — stateless) ───────────────────
+  const httpServer = createServer(async (req, res) => {
     try {
       await handleMcpRequest(req, res);
     } catch (err) {
@@ -282,8 +259,8 @@ async function main(): Promise<void> {
     }
   });
 
-  mcpServer.listen(MCP_PORT, HOST, () => {
-    Logger.info(`opencode-mcp MCP server listening on ${HOST}:${MCP_PORT}`);
+  httpServer.listen(MCP_PORT, HOST, () => {
+    Logger.info(`opencode-mcp MCP server listening on ${HOST}:${MCP_PORT} (stateless mode)`);
   });
 
   // ── Health server ───────────────────────────────────────────────
@@ -310,13 +287,6 @@ async function main(): Promise<void> {
 
     clearInterval(purgeInterval);
 
-    // Close all active sessions.
-    for (const [sid, session] of activeSessions) {
-      session.transport.close().catch(() => {});
-      session.server.close().catch(() => {});
-      activeSessions.delete(sid);
-    }
-
     cleanupActiveProcesses();
     cleanupActiveRespondProcesses();
 
@@ -330,7 +300,7 @@ async function main(): Promise<void> {
     }
     resetTaskManager();
 
-    mcpServer.close();
+    httpServer.close();
     healthServer.close();
 
     Logger.info("Shutdown complete");
