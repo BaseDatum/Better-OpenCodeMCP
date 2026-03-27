@@ -384,10 +384,10 @@ RETURNS: JSON with stdout, stderr, exit code`,
     return new Promise((resolve) => {
       // Build child environment with git credential helper support.
       const childEnv: Record<string, string | undefined> = { ...process.env, HOME: root };
-      const userId = process.env.__OPENCODE_USER_ID;
-      if (userId) {
+      const vaultToken = process.env.__OPENCODE_VAULT_TOKEN;
+      if (vaultToken) {
         const githubTokenUrl = process.env.OPENCODE_MCP_GITHUB_MCP_URL ?? "http://github-token-service:8013";
-        childEnv.__OPENCODE_USER_ID = userId;
+        childEnv.__OPENCODE_VAULT_TOKEN = vaultToken;
         childEnv.__OPENCODE_GITHUB_TOKEN_URL = githubTokenUrl;
         childEnv.GIT_TERMINAL_PROMPT = "0";
         const existingCount = parseInt(childEnv.GIT_CONFIG_COUNT ?? "0", 10);

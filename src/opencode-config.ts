@@ -31,12 +31,19 @@ interface OpenCodeConfig {
  * This sets up:
  * - OpenRouter as the provider (key comes from env at runtime).
  * - GitHub MCP server pointing to the token service proxy with
- *   the user's X-Dialogue-User-Id header injected.
+ *   the user's Vault token for authentication.
+ *
+ * @param vaultToken - Optional OpenBao Vault token.  When provided the
+ *   GitHub MCP header uses ``Authorization: Bearer <token>`` so that
+ *   github-token-service can validate the caller cryptographically.
+ *   Omitted during startup refresh (no active request); the config is
+ *   regenerated with a fresh token on every tool invocation.
  */
 export async function generateOpenCodeConfig(
   userId: string,
   workspaceBase: string,
   githubMcpUrl: string,
+  vaultToken?: string,
 ): Promise<void> {
   const configDir = WorkspaceManager.configDir(workspaceBase, userId);
   const configPath = join(configDir, "opencode.json");
@@ -66,9 +73,9 @@ export async function generateOpenCodeConfig(
       github: {
         type: "remote",
         url: `${githubMcpUrl}/`,
-        headers: {
-          "X-Dialogue-User-Id": userId,
-        },
+        headers: vaultToken
+          ? { Authorization: `Bearer ${vaultToken}` }
+          : {},
       },
     },
     // Restrict tool access for security — disable write operations by

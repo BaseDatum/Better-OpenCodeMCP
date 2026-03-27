@@ -7,7 +7,7 @@
 # (non-expired) token.
 #
 # Required environment variables:
-#   __OPENCODE_USER_ID            — the Dialogue user UUID
+#   __OPENCODE_VAULT_TOKEN        — OpenBao Vault token for authentication
 #   __OPENCODE_GITHUB_TOKEN_URL   — base URL of the git-token endpoint
 #                                   (e.g. http://github-token-service:8013)
 #
@@ -44,16 +44,17 @@ if [ "$protocol" != "https" ] || [ "$host" != "github.com" ]; then
 fi
 
 # Bail out if required env vars are missing.
-if [ -z "$__OPENCODE_USER_ID" ] || [ -z "$__OPENCODE_GITHUB_TOKEN_URL" ]; then
+if [ -z "$__OPENCODE_VAULT_TOKEN" ] || [ -z "$__OPENCODE_GITHUB_TOKEN_URL" ]; then
     exit 0
 fi
 
 # Fetch a fresh token from the github-token-service.
-# --fail-with-body: exit non-zero on HTTP errors.
+# Authenticate with the OpenBao Vault token (validated server-side).
+# --fail: exit non-zero on HTTP errors.
 # --silent: no progress output on stderr (would confuse git).
 # --max-time 10: don't hang forever if the service is down.
 token=$(curl --fail --silent --max-time 10 \
-    -H "X-Dialogue-User-Id: ${__OPENCODE_USER_ID}" \
+    -H "Authorization: Bearer ${__OPENCODE_VAULT_TOKEN}" \
     "${__OPENCODE_GITHUB_TOKEN_URL}/git-token" 2>/dev/null) || exit 0
 
 # If we got an empty response, bail.

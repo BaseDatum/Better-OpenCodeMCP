@@ -17,9 +17,18 @@ RUN opencode --version
 # Set up application directory
 WORKDIR /app
 
-# Copy package files and install production dependencies
-COPY package*.json ./
-RUN npm ci --omit=dev --ignore-scripts
+# Copy shared-bao-auth package from named build context and build it.
+# Local: docker build --build-context shared-bao-auth=../../packages/shared-bao-auth-ts .
+# CI:   --build-context shared-bao-auth=<path to packages/shared-bao-auth-ts>
+COPY --from=shared-bao-auth / /packages/shared-bao-auth-ts
+RUN cd /packages/shared-bao-auth-ts && npm install && npm run build
+
+# Copy package.json and install production dependencies.
+# Lockfile is not copied — npm generates a fresh one because the file:
+# dependency on shared-bao-auth resolves differently inside Docker
+# (via --build-context) than locally.
+COPY package.json ./
+RUN npm install --omit=dev --ignore-scripts
 
 # Copy pre-built TypeScript output
 COPY dist/ ./dist/
@@ -39,7 +48,6 @@ ENV OPENCODE_MCP_HOST=0.0.0.0 \
     OPENCODE_MCP_PORT=8027 \
     OPENCODE_MCP_HEALTH_PORT=8028 \
     OPENCODE_MCP_LOG_LEVEL=info \
-    OPENCODE_MCP_USER_ID_HEADER=X-Dialogue-User-Id \
     OPENCODE_MCP_SHARD_MANAGER_URL=http://agent-shard-manager:8010 \
     OPENCODE_MCP_GITHUB_MCP_URL=http://github-token-service:8013 \
     OPENCODE_MCP_MAX_CONCURRENT_PER_USER=3 \

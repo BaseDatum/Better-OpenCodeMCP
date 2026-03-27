@@ -54,6 +54,7 @@ import { setServerConfig } from "./config.js";
 import { WorkspaceManager } from "./workspace.js";
 import { resolveOpenRouterKey } from "./auth.js";
 import { generateOpenCodeConfig, refreshAllConfigs } from "./opencode-config.js";
+import { McpAuthValidator, AuthError } from "shared-bao-auth";
 
 // ============================================================================
 // Environment configuration
@@ -62,7 +63,6 @@ import { generateOpenCodeConfig, refreshAllConfigs } from "./opencode-config.js"
 const HOST = process.env.OPENCODE_MCP_HOST ?? "0.0.0.0";
 const MCP_PORT = parseInt(process.env.OPENCODE_MCP_PORT ?? "8027", 10);
 const HEALTH_PORT = parseInt(process.env.OPENCODE_MCP_HEALTH_PORT ?? "8028", 10);
-const USER_ID_HEADER = (process.env.OPENCODE_MCP_USER_ID_HEADER ?? "x-dialogue-user-id").toLowerCase();
 const LOG_LEVEL = (process.env.OPENCODE_MCP_LOG_LEVEL ?? "info") as LogLevel;
 const MAX_CONCURRENT_PER_USER = parseInt(process.env.OPENCODE_MCP_MAX_CONCURRENT_PER_USER ?? "3", 10);
 const WORKSPACE_BASE = process.env.OPENCODE_MCP_WORKSPACE_BASE ?? "/workspaces";
@@ -91,7 +91,7 @@ function decrUserProcessCount(userId: string): void {
 // MCP Server factory — one per request (stateless)
 // ============================================================================
 
-function createMcpServer(userId: string): Server {
+function createMcpServer(userId: string, vaultToken: string): Server {
   const server = new Server(
     { name: "opencode-mcp", version: "2.1.0" },
     { capabilities: { tools: {}, prompts: {}, logging: {} } },
@@ -116,6 +116,7 @@ function createMcpServer(userId: string): Server {
       // Inject per-user context into the environment before execution.
       // The opencode tool reads these from the environment.
       process.env.__OPENCODE_USER_ID = userId;
+      process.env.__OPENCODE_VAULT_TOKEN = vaultToken;
       process.env.__OPENCODE_WORKSPACE = WorkspaceManager.userDir(WORKSPACE_BASE, userId);
 
       // Resolve the user's OpenRouter key (cached).
@@ -125,7 +126,8 @@ function createMcpServer(userId: string): Server {
       }
 
       // Ensure the per-user opencode.json config is up to date.
-      await generateOpenCodeConfig(userId, WORKSPACE_BASE, GITHUB_MCP_URL);
+      // Pass the current Vault token so the GitHub MCP header is always fresh.
+      await generateOpenCodeConfig(userId, WORKSPACE_BASE, GITHUB_MCP_URL, vaultToken);
 
       const result = await executeTool(toolName, args);
 
@@ -162,6 +164,16 @@ function createMcpServer(userId: string): Server {
 // HTTP handlers
 // ============================================================================
 
+// Module-level auth validator — initialized lazily.
+let mcpValidator: McpAuthValidator | null = null;
+
+function getValidator(): McpAuthValidator {
+  if (!mcpValidator) {
+    mcpValidator = new McpAuthValidator();
+  }
+  return mcpValidator;
+}
+
 async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   // Only accept POST — stateless mode has no GET SSE or DELETE session.
   if (req.method !== "POST") {
@@ -170,20 +182,21 @@ async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Prom
     return;
   }
 
-  // Extract user ID from header.
-  const userId = req.headers[USER_ID_HEADER] as string | undefined;
-  if (!userId) {
+  // Authenticate via OpenBao Vault token.
+  let userId: string;
+  const authHeader = req.headers["authorization"] as string | undefined;
+  try {
+    userId = await getValidator().extractUserId(authHeader);
+  } catch (err) {
+    const msg = err instanceof AuthError ? err.message : "Authentication failed";
     res.writeHead(401, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: `Missing ${USER_ID_HEADER} header` }));
+    res.end(JSON.stringify({ error: msg }));
     return;
   }
 
-  // Validate user ID format (expect UUID prefix or full UUID).
-  if (!/^[a-f0-9-]{8,36}$/i.test(userId)) {
-    res.writeHead(400, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Invalid user ID format" }));
-    return;
-  }
+  // Capture the raw Vault token so child processes (git credential helper,
+  // OpenCode CLI) can authenticate to github-token-service with it.
+  const vaultToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
 
   // Ensure workspace exists.
   await WorkspaceManager.ensureUserDir(WORKSPACE_BASE, userId);
@@ -193,7 +206,7 @@ async function handleMcpRequest(req: IncomingMessage, res: ServerResponse): Prom
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,  // stateless mode
   });
-  const mcpServer = createMcpServer(userId);
+  const mcpServer = createMcpServer(userId, vaultToken);
 
   await mcpServer.connect(transport);
 

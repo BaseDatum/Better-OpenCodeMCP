@@ -138,10 +138,11 @@ function spawnOpenCodeProcess(
   // Configure git credential helper so that git clone/fetch/push
   // against private GitHub repos uses the user's GitHub App token.
   // The helper script fetches a fresh token from github-token-service
-  // on every invocation, so long-running processes always get valid tokens.
-  if (userId) {
+  // on every invocation, authenticating with the Vault token.
+  const vaultToken = process.env.__OPENCODE_VAULT_TOKEN;
+  if (vaultToken) {
     const githubTokenUrl = process.env.OPENCODE_MCP_GITHUB_MCP_URL ?? "http://github-token-service:8013";
-    childEnv.__OPENCODE_USER_ID = userId;
+    childEnv.__OPENCODE_VAULT_TOKEN = vaultToken;
     childEnv.__OPENCODE_GITHUB_TOKEN_URL = githubTokenUrl;
     childEnv.GIT_TERMINAL_PROMPT = "0";
     // Use GIT_CONFIG_* env vars to inject the credential helper without
