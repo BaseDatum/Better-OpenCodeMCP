@@ -4,6 +4,7 @@ node_modules
 src
 docs
 scripts
+!scripts/git-credential-dialogue.sh
 *.md
 !README.md
 tsconfig.json

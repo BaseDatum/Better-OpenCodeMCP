@@ -76,10 +76,29 @@ function spawnOpenCodeRespondProcess(
 
   Logger.debug(`Spawning OpenCode respond: ${CLI.COMMANDS.OPENCODE} ${args.map(a => `"${a}"`).join(" ")}`);
 
+  // Build per-user environment (mirrors spawnOpenCodeProcess in opencode.tool.ts).
+  const childEnv: Record<string, string | undefined> = { ...process.env };
+  const userId = process.env.__OPENCODE_USER_ID;
+  const userWorkspace = process.env.__OPENCODE_WORKSPACE;
+
+  // Configure git credential helper for private repo access.
+  if (userId) {
+    const githubTokenUrl = process.env.OPENCODE_MCP_GITHUB_MCP_URL ?? "http://github-token-service:8013";
+    childEnv.__OPENCODE_USER_ID = userId;
+    childEnv.__OPENCODE_GITHUB_TOKEN_URL = githubTokenUrl;
+    childEnv.GIT_TERMINAL_PROMPT = "0";
+    const existingCount = parseInt(childEnv.GIT_CONFIG_COUNT ?? "0", 10);
+    childEnv.GIT_CONFIG_COUNT = String(existingCount + 1);
+    childEnv[`GIT_CONFIG_KEY_${existingCount}`] = "credential.helper";
+    childEnv[`GIT_CONFIG_VALUE_${existingCount}`] = "/app/scripts/git-credential-dialogue.sh";
+  }
+
   // Spawn the process
   const proc = spawn(CLI.COMMANDS.OPENCODE, args, {
     stdio: ["ignore", "pipe", "pipe"],
     shell: true,
+    cwd: userWorkspace || undefined,
+    env: childEnv,
   });
 
   activeRespondProcesses.set(taskId, proc);

@@ -24,6 +24,10 @@ RUN npm ci --omit=dev --ignore-scripts
 # Copy pre-built TypeScript output
 COPY dist/ ./dist/
 
+# Copy git credential helper script
+COPY scripts/git-credential-dialogue.sh /app/scripts/git-credential-dialogue.sh
+RUN chmod +x /app/scripts/git-credential-dialogue.sh
+
 # Create workspace volume mount point
 RUN mkdir -p /workspaces
 
